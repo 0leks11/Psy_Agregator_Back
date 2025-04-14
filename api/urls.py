@@ -12,9 +12,10 @@ router.register(r'invite-codes', views.InviteCodeViewSet)
 
 urlpatterns = [
     path('', include(router.urls)),
-    path('auth/login/', obtain_auth_token, name='api_token_auth'),
-    path('auth/register/', views.UserViewSet.as_view({'post': 'register_therapist'}), name='register'),
-    path('auth/register/client/', views.UserViewSet.as_view({'post': 'register_client'}), name='register_client'),
-    path('auth/register/therapist/', views.UserViewSet.as_view({'post': 'register_therapist'}), name='register_therapist'),
-    path('auth/user/', views.UserViewSet.as_view({'get': 'retrieve'}), name='user-detail'),
+    path('auth/login/', views.EmailAuthToken.as_view(), name='api_token_auth'),
+    path('auth/register/client/', views.ClientRegistrationView.as_view(), name='register_client'),
+    path('auth/register/therapist/', views.TherapistRegistrationView.as_view(), name='register_therapist'),
+    path('auth/user/', views.CurrentUserView.as_view(), name='current-user'),
+    path('therapists/', views.TherapistListView.as_view(), name='therapist-list'),
+    path('therapists/<int:pk>/', views.TherapistDetailView.as_view(), name='therapist-detail'),
 ] 
