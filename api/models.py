@@ -62,6 +62,9 @@ class TherapistProfile(models.Model):
     total_hours_worked = models.PositiveIntegerField("Всего часов практики", blank=True, null=True)
     display_hours = models.BooleanField("Показывать часы практики в профиле", default=False)
     office_location = models.CharField("Место/Формат работы", max_length=200, blank=True)
+    video_intro_url = models.URLField("Ссылка на видео-визитку", blank=True, null=True)
+    website_url = models.URLField("Личный сайт", blank=True, null=True)
+    linkedin_url = models.URLField("Профиль LinkedIn", blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -87,3 +90,78 @@ class InviteCode(models.Model):
 
     def __str__(self):
         return f"Invite code: {self.code}"
+
+# --- Новые модели для работы с фотографиями и публикациями психологов ---
+
+class TherapistPhoto(models.Model):
+    """
+    Модель для управления фотографиями психолога.
+    Позволяет загружать несколько фотографий с подписями и настраивать их порядок.
+    """
+    therapist_profile = models.ForeignKey(
+        TherapistProfile, 
+        on_delete=models.CASCADE, 
+        related_name='photos',
+        verbose_name="Профиль психолога"
+    )
+    image = models.ImageField(
+        upload_to='therapist_photos/', 
+        verbose_name="Изображение"
+    )
+    caption = models.CharField(
+        max_length=200, 
+        blank=True, 
+        null=True,
+        verbose_name="Подпись"
+    )
+    order = models.PositiveIntegerField(
+        default=0, 
+        verbose_name="Порядок"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Фотография психолога"
+        verbose_name_plural = "Фотографии психологов"
+        ordering = ['order', 'created_at']
+
+    def __str__(self):
+        return f"Фото {self.id} профиля {self.therapist_profile.user.email}"
+
+
+class Publication(models.Model):
+    """
+    Модель для публикаций психологов (статьи, информационные материалы).
+    """
+    author = models.ForeignKey(
+        settings.AUTH_USER_MODEL, 
+        on_delete=models.CASCADE,
+        related_name='publications',
+        verbose_name="Автор"
+    )
+    title = models.CharField(
+        max_length=200,
+        verbose_name="Заголовок"
+    )
+    content = models.TextField(verbose_name="Содержание")
+    featured_image = models.ImageField(
+        upload_to='publication_images/',
+        blank=True, 
+        null=True,
+        verbose_name="Изображение"
+    )
+    is_published = models.BooleanField(
+        default=False,
+        verbose_name="Опубликовано"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Публикация"
+        verbose_name_plural = "Публикации"
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.title} (by {self.author.email})"

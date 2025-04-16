@@ -3,7 +3,7 @@ from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.utils.html import format_html
 from .models import (
     User, UserProfile, TherapistProfile, ClientProfile, InviteCode,
-    Skill, Language
+    Skill, Language, TherapistPhoto, Publication
 )
 
 # --- Регистрация новых моделей ---
@@ -75,6 +75,32 @@ if admin.site.is_registered(User):
 
 admin.site.register(User, UserAdmin)
 
+# Inline для фото в профиле терапевта
+class TherapistPhotoInline(admin.TabularInline):  # Используем Tabular для компактности
+    model = TherapistPhoto
+    extra = 1  # Показывать одно поле для добавления нового фото
+    fields = ('image', 'display_image', 'caption', 'order')
+    readonly_fields = ('display_image',)
+
+    def display_image(self, obj):
+        if obj.image:
+            return format_html('<img src="{}" height="50" />', obj.image.url)
+        return "Нет фото"
+    display_image.short_description = 'Превью'
+
+@admin.register(UserProfile)
+class UserProfileAdmin(admin.ModelAdmin):
+    list_display = ('user', 'role', 'gender', 'profile_picture_preview')
+    list_filter = ('role', 'gender')
+    search_fields = ('user__email', 'user__first_name', 'user__last_name')
+    raw_id_fields = ('user',)
+
+    def profile_picture_preview(self, obj):
+        if obj.profile_picture:
+            return format_html('<img src="{}" height="50" />', obj.profile_picture.url)
+        return "Нет фото"
+    profile_picture_preview.short_description = 'Фото профиля'
+
 @admin.register(TherapistProfile)
 class TherapistProfileAdmin(admin.ModelAdmin):
     list_display = ('user', 'is_verified', 'is_subscribed', 'experience_years', 'display_hours')
@@ -83,9 +109,46 @@ class TherapistProfileAdmin(admin.ModelAdmin):
     list_editable = ('is_verified', 'is_subscribed', 'display_hours')
     raw_id_fields = ('user',)
     filter_horizontal = ('skills', 'languages',)
+    # Добавляем инлайн для фото
+    inlines = [TherapistPhotoInline]
+    # Добавляем новые поля в fieldsets
+    fields = ('user', 'about', 'experience_years', 'office_location',
+             'skills', 'languages', 'total_hours_worked', 'display_hours',
+             'video_intro_url', 'website_url', 'linkedin_url',
+             'is_verified', 'is_subscribed')
+
+@admin.register(ClientProfile)
+class ClientProfileAdmin(admin.ModelAdmin):
+    list_display = ('user', 'created_at')
+    search_fields = ('user__email', 'user__first_name', 'user__last_name', 'request_details')
+    raw_id_fields = ('user',)
+    filter_horizontal = ('interested_topics',)
 
 @admin.register(InviteCode)
 class InviteCodeAdmin(admin.ModelAdmin):
-    list_display = ('code', 'is_used', 'created_by', 'created_at', 'used_at')
+    list_display = ('code', 'is_used', 'created_by', 'created_at')
     list_filter = ('is_used',)
     search_fields = ('code', 'created_by__email')
+    readonly_fields = ('created_at',)
+
+# Админка для Публикаций
+@admin.register(Publication)
+class PublicationAdmin(admin.ModelAdmin):
+    list_display = ('title', 'author_email', 'is_published', 'created_at', 'updated_at')
+    list_filter = ('is_published', 'author')
+    search_fields = ('title', 'content', 'author__email')
+    list_editable = ('is_published',)
+    raw_id_fields = ('author',)
+    readonly_fields = ('created_at', 'updated_at', 'display_featured_image')
+    fields = ('author', 'title', 'content', 'featured_image', 'display_featured_image', 'is_published', 'created_at', 'updated_at')
+
+    def author_email(self, obj):
+        return obj.author.email
+    author_email.short_description = 'Автор'
+    author_email.admin_order_field = 'author__email'
+
+    def display_featured_image(self, obj):
+        if obj.featured_image:
+            return format_html('<img src="{}" height="100" />', obj.featured_image.url)
+        return "Нет фото"
+    display_featured_image.short_description = 'Превью изображения'

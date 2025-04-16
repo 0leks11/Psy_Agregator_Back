@@ -7,16 +7,21 @@ from rest_framework.authtoken.views import ObtainAuthToken
 from django.contrib.auth import get_user_model, authenticate
 from django.shortcuts import get_object_or_404
 from django.db import transaction
-from .models import UserProfile, TherapistProfile, ClientProfile, InviteCode, Skill, Language, Role
+from .models import UserProfile, TherapistProfile, ClientProfile, InviteCode, Skill, Language, Role, TherapistPhoto, Publication
 from .serializers import (
     UserSerializer, UserProfileSerializer, TherapistProfileSerializer,
     ClientProfileSerializer, InviteCodeSerializer, ClientRegistrationSerializer,
     TherapistRegistrationSerializer, EmailAuthTokenSerializer,
     CurrentUserSerializer, TherapistProfileReadSerializer, SkillSerializer, LanguageSerializer,
     UserUpdateSerializer, UserProfileUpdateSerializer,
-    TherapistProfileUpdateSerializer, ClientProfileUpdateSerializer
+    TherapistProfileUpdateSerializer, ClientProfileUpdateSerializer,
+    TherapistPhotoSerializer, PublicationSerializer, PublicationWriteSerializer
 )
 from rest_framework.views import APIView
+from .permissions import IsOwnerOrReadOnly, IsTherapistOwner
+from django.db.models import Prefetch, Count, Avg, Q
+from django.utils import timezone
+from django.conf import settings
 
 User = get_user_model()
 
@@ -163,19 +168,44 @@ class LanguageListView(generics.ListAPIView):
     permission_classes = [permissions.AllowAny]
 
 class TherapistListView(generics.ListAPIView):
+    """
+    Представление для списка терапевтов с пагинацией.
+    Возвращает только подтвержденных терапевтов с активной подпиской.
+    """
     serializer_class = TherapistProfileReadSerializer
     permission_classes = [permissions.AllowAny]
-    queryset = TherapistProfile.objects.filter(
-        is_verified=True, is_subscribed=True
-    ).select_related('user', 'user__profile').prefetch_related('skills', 'languages')
+    
+    def get_queryset(self):
+        queryset = TherapistProfile.objects.filter(
+            is_verified=True,
+            is_subscribed=True
+        ).prefetch_related(
+            'skills',
+            'languages',
+            'photos',
+            Prefetch('user', queryset=UserProfile.objects.all())
+        ).select_related('user')
+        
+        return queryset
 
 class TherapistDetailView(generics.RetrieveAPIView):
+    """
+    Представление для детальной информации о терапевте.
+    Возвращает только подтвержденных терапевтов с активной подпиской.
+    """
     serializer_class = TherapistProfileReadSerializer
     permission_classes = [permissions.AllowAny]
-    queryset = TherapistProfile.objects.filter(
-        is_verified=True, is_subscribed=True
-    ).select_related('user', 'user__profile').prefetch_related('skills', 'languages')
     lookup_field = 'id'
+    
+    def get_queryset(self):
+        return TherapistProfile.objects.filter(
+            is_verified=True,
+            is_subscribed=True
+        ).prefetch_related(
+            'skills',
+            'languages',
+            'photos'
+        ).select_related('user')
 
 class MyProfileBaseUpdateView(generics.UpdateAPIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -235,3 +265,159 @@ class MyClientProfileUpdateView(generics.UpdateAPIView):
     def update(self, request, *args, **kwargs):
         response = super().update(request, *args, **kwargs)
         return Response(CurrentUserSerializer(self.request.user, context={'request': request}).data)
+
+class MyTherapistPhotoViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet для управления фотографиями терапевта.
+    Терапист может создавать, просматривать, обновлять и удалять свои фотографии.
+    """
+    serializer_class = TherapistPhotoSerializer
+    permission_classes = [permissions.IsAuthenticated, IsTherapistOwner]
+    
+    def get_queryset(self):
+        """
+        Получить фотографии, связанные с профилем терапевта текущего пользователя.
+        """
+        if not hasattr(self.request.user, 'therapist_profile'):
+            return TherapistPhoto.objects.none()
+            
+        return TherapistPhoto.objects.filter(
+            therapist_profile=self.request.user.therapist_profile
+        )
+    
+    def perform_create(self, serializer):
+        """
+        При создании фотографии связать её с профилем терапевта текущего пользователя.
+        """
+        if not hasattr(self.request.user, 'therapist_profile'):
+            raise ValidationError("У вас нет профиля терапевта")
+            
+        serializer.save(therapist_profile=self.request.user.therapist_profile)
+    
+    def get_object(self):
+        """
+        Получить объект фотографии и проверить, принадлежит ли она текущему пользователю.
+        """
+        obj = super().get_object()
+        self.check_object_permissions(self.request, obj)
+        return obj
+
+class MyPublicationViewSet(viewsets.ModelViewSet):
+    """
+    ViewSet для управления публикациями терапевта.
+    Терапист может создавать, просматривать, обновлять и удалять свои публикации.
+    Другие пользователи могут только просматривать опубликованные статьи.
+    """
+    permission_classes = [permissions.IsAuthenticated, IsOwnerOrReadOnly]
+    
+    def get_serializer_class(self):
+        """
+        Использовать разные сериализаторы для чтения и записи.
+        """
+        if self.request.method in permissions.SAFE_METHODS:
+            return PublicationSerializer
+        return PublicationWriteSerializer
+    
+    def get_queryset(self):
+        """
+        Получить публикации текущего пользователя-терапевта.
+        Для небезопасных методов и просмотра черновиков нужно быть автором.
+        """
+        user = self.request.user
+        
+        # Проверяем, что у пользователя есть профиль терапевта
+        if not hasattr(user, 'therapist_profile'):
+            return Publication.objects.none()
+            
+        # Для методов чтения (GET, HEAD, OPTIONS)
+        if self.request.method in permissions.SAFE_METHODS:
+            # Проверяем, запрашивается ли конкретная статья или список
+            if 'pk' in self.kwargs:
+                # Возвращаем любую статью (включая черновики), если пользователь её автор
+                return Publication.objects.filter(
+                    author=user
+                ).select_related('author')
+            else:
+                # Для списка возвращаем все статьи (включая черновики) текущего пользователя
+                return Publication.objects.filter(
+                    author=user
+                ).select_related('author')
+        
+        # Для методов записи (POST, PUT, PATCH, DELETE)
+        # Возвращаем только статьи текущего пользователя
+        return Publication.objects.filter(
+            author=user
+        ).select_related('author')
+    
+    def perform_create(self, serializer):
+        """
+        При создании публикации установить автора - текущего пользователя.
+        """
+        serializer.save(author=self.request.user)
+    
+    def get_object(self):
+        """
+        Получить объект публикации и проверить разрешения.
+        """
+        obj = super().get_object()
+        self.check_object_permissions(self.request, obj)
+        return obj
+
+class TherapistPublicationsListView(generics.ListAPIView):
+    """
+    Представление для просмотра опубликованных статей конкретного терапевта.
+    Доступно всем пользователям.
+    """
+    serializer_class = PublicationSerializer
+    permission_classes = [permissions.AllowAny]
+    
+    def get_queryset(self):
+        """
+        Получить опубликованные статьи конкретного терапевта.
+        """
+        therapist_id = self.kwargs.get('therapist_id')
+        
+        # Находим профиль терапевта
+        therapist = get_object_or_404(
+            TherapistProfile, 
+            id=therapist_id,
+            is_verified=True,
+            is_subscribed=True
+        )
+        
+        # Возвращаем только опубликованные статьи
+        return Publication.objects.filter(
+            author=therapist.user,
+            status='published',
+            published_at__lte=timezone.now()
+        ).select_related('author').order_by('-published_at')
+    
+    # Здесь можно добавить пагинацию, если это необходимо
+
+# Добавим класс для просмотра фотографий конкретного терапевта
+class TherapistPhotosListView(generics.ListAPIView):
+    """
+    Представление для просмотра фотографий конкретного терапевта.
+    Доступно всем пользователям.
+    """
+    serializer_class = TherapistPhotoSerializer
+    permission_classes = [permissions.AllowAny]
+    
+    def get_queryset(self):
+        """
+        Получить фотографии конкретного терапевта.
+        """
+        therapist_id = self.kwargs.get('therapist_id')
+        
+        # Находим профиль терапевта
+        therapist = get_object_or_404(
+            TherapistProfile, 
+            id=therapist_id,
+            is_verified=True,
+            is_subscribed=True
+        )
+        
+        # Возвращаем все фотографии терапевта, отсортированные по порядку
+        return TherapistPhoto.objects.filter(
+            therapist_profile=therapist
+        ).order_by('order')

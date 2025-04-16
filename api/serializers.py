@@ -3,7 +3,7 @@ from django.contrib.auth import get_user_model
 from django.db import transaction
 from .models import (
     UserProfile, TherapistProfile, ClientProfile, InviteCode, Role, Gender,
-    Skill, Language
+    Skill, Language, TherapistPhoto, Publication
 )
 from rest_framework.authtoken.models import Token
 from django.contrib.auth import authenticate
@@ -37,12 +37,30 @@ class BaseUserSerializer(serializers.ModelSerializer):
         model = User
         fields = ('id', 'first_name', 'last_name')
 
+# --- Сериализатор для фотографий психолога ---
+class TherapistPhotoSerializer(serializers.ModelSerializer):
+    image_url = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = TherapistPhoto
+        fields = ('id', 'image', 'image_url', 'caption', 'order', 'therapist_profile')
+        read_only_fields = ('therapist_profile',)
+        
+    def get_image_url(self, obj):
+        if obj.image:
+            request = self.context.get('request')
+            if request is not None:
+                return request.build_absolute_uri(obj.image.url)
+            return obj.image.url
+        return None
+
 class TherapistProfileReadSerializer(serializers.ModelSerializer):
     user = BaseUserSerializer(read_only=True)
     profile = UserProfileSerializer(source='user.profile', read_only=True)
     skills = serializers.StringRelatedField(many=True, read_only=True)
     languages = serializers.StringRelatedField(many=True, read_only=True)
     total_hours_worked = serializers.SerializerMethodField()
+    photos = TherapistPhotoSerializer(many=True, read_only=True)
 
     class Meta:
         model = TherapistProfile
@@ -52,6 +70,8 @@ class TherapistProfileReadSerializer(serializers.ModelSerializer):
             'skills', 'languages',
             'total_hours_worked',
             'office_location',
+            'video_intro_url', 'website_url', 'linkedin_url',
+            'photos',
         )
 
     def get_total_hours_worked(self, obj):
@@ -97,7 +117,8 @@ class TherapistProfileDetailedSerializer(serializers.ModelSerializer):
         model = TherapistProfile
         fields = ('about', 'experience_years', 'skills', 'languages',
                   'total_hours_worked', 'display_hours', 'office_location',
-                  'is_verified', 'is_subscribed')
+                  'is_verified', 'is_subscribed',
+                  'video_intro_url', 'website_url', 'linkedin_url')
 
 class ClientProfileDetailedSerializer(serializers.ModelSerializer):
     interested_topics = serializers.PrimaryKeyRelatedField(queryset=Skill.objects.all(), many=True, required=False)
@@ -127,7 +148,8 @@ class TherapistProfileUpdateSerializer(serializers.ModelSerializer):
     class Meta:
         model = TherapistProfile
         fields = ('about', 'experience_years', 'skills', 'languages',
-                  'total_hours_worked', 'display_hours', 'office_location')
+                  'total_hours_worked', 'display_hours', 'office_location',
+                  'video_intro_url', 'website_url', 'linkedin_url')
 
 class ClientProfileUpdateSerializer(serializers.ModelSerializer):
     interested_topics = serializers.PrimaryKeyRelatedField(queryset=Skill.objects.all(), many=True, required=False)
@@ -252,7 +274,8 @@ class EmailAuthTokenSerializer(serializers.Serializer):
 class TherapistProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = TherapistProfile
-        fields = ['about', 'experience_years', 'is_verified', 'is_subscribed', 'skills', 'languages']
+        fields = ['about', 'experience_years', 'is_verified', 'is_subscribed', 'skills', 'languages',
+                 'video_intro_url', 'website_url', 'linkedin_url']
 
 class ClientProfileSerializer(serializers.ModelSerializer):
     class Meta:
@@ -271,4 +294,53 @@ class UserSerializer(serializers.ModelSerializer):
 class InviteCodeSerializer(serializers.ModelSerializer):
     class Meta:
         model = InviteCode
-        fields = ['code', 'is_used', 'created_at'] 
+        fields = ['code', 'is_used', 'created_at']
+
+# --- Сериализаторы для публикаций ---
+class PublicationSerializer(serializers.ModelSerializer):
+    """
+    Сериализатор для отображения публикаций
+    """
+    author_name = serializers.SerializerMethodField()
+    author_photo = serializers.SerializerMethodField()
+    featured_image_url = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Publication
+        fields = (
+            'id', 'author', 'author_name', 'author_photo',
+            'title', 'content', 'featured_image', 'featured_image_url',
+            'is_published', 'created_at', 'updated_at'
+        )
+        read_only_fields = ('author', 'created_at', 'updated_at')
+    
+    def get_author_name(self, obj):
+        return f"{obj.author.first_name} {obj.author.last_name}"
+    
+    def get_author_photo(self, obj):
+        if hasattr(obj.author, 'profile') and obj.author.profile.profile_picture:
+            request = self.context.get('request')
+            if request is not None:
+                return request.build_absolute_uri(obj.author.profile.profile_picture.url)
+            return obj.author.profile.profile_picture.url
+        return None
+    
+    def get_featured_image_url(self, obj):
+        if obj.featured_image:
+            request = self.context.get('request')
+            if request is not None:
+                return request.build_absolute_uri(obj.featured_image.url)
+            return obj.featured_image.url
+        return None
+
+class PublicationWriteSerializer(serializers.ModelSerializer):
+    """
+    Сериализатор для создания и обновления публикаций
+    """
+    class Meta:
+        model = Publication
+        fields = ('title', 'content', 'featured_image', 'is_published')
+        
+    def create(self, validated_data):
+        # author устанавливается в представлении
+        return Publication.objects.create(**validated_data) 
