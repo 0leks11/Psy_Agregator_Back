@@ -1,15 +1,20 @@
 from django.shortcuts import render
-from rest_framework import viewsets, status, permissions, generics
+from rest_framework import viewsets, status, permissions, generics, parsers
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.authtoken.models import Token
 from rest_framework.authtoken.views import ObtainAuthToken
-from django.contrib.auth import get_user_model
-from .models import UserProfile, TherapistProfile, ClientProfile, InviteCode
+from django.contrib.auth import get_user_model, authenticate
+from django.shortcuts import get_object_or_404
+from django.db import transaction
+from .models import UserProfile, TherapistProfile, ClientProfile, InviteCode, Skill, Language, Role
 from .serializers import (
     UserSerializer, UserProfileSerializer, TherapistProfileSerializer,
     ClientProfileSerializer, InviteCodeSerializer, ClientRegistrationSerializer,
-    TherapistRegistrationSerializer, EmailAuthTokenSerializer
+    TherapistRegistrationSerializer, EmailAuthTokenSerializer,
+    CurrentUserSerializer, TherapistProfileReadSerializer, SkillSerializer, LanguageSerializer,
+    UserUpdateSerializer, UserProfileUpdateSerializer,
+    TherapistProfileUpdateSerializer, ClientProfileUpdateSerializer
 )
 from rest_framework.views import APIView
 
@@ -55,7 +60,7 @@ class ClientRegistrationView(generics.CreateAPIView):
         token, created = Token.objects.get_or_create(user=user)
         return Response({
             'token': token.key,
-            'user': UserSerializer(user).data
+            'user': CurrentUserSerializer(user, context={'request': request}).data
         }, status=status.HTTP_201_CREATED)
 
 class TherapistRegistrationView(generics.CreateAPIView):
@@ -69,7 +74,7 @@ class TherapistRegistrationView(generics.CreateAPIView):
         token, created = Token.objects.get_or_create(user=user)
         return Response({
             'token': token.key,
-            'user': UserSerializer(user).data
+            'user': CurrentUserSerializer(user, context={'request': request}).data
         }, status=status.HTTP_201_CREATED)
 
 class UserProfileViewSet(viewsets.ModelViewSet):
@@ -96,46 +101,11 @@ class InviteCodeViewSet(viewsets.ModelViewSet):
         serializer.save(created_by=self.request.user)
 
 class CurrentUserView(generics.RetrieveAPIView):
+    serializer_class = CurrentUserSerializer
     permission_classes = [permissions.IsAuthenticated]
-    
-    def get(self, request, *args, **kwargs):
-        user = request.user
-        user_data = UserSerializer(user).data
-        
-        try:
-            # Получаем базовый профиль пользователя
-            user_profile = UserProfile.objects.filter(user=user).first()
-            if user_profile:
-                user_data['profile'] = UserProfileSerializer(user_profile).data
-            
-            # Если пользователь - терапевт, получаем его профиль терапевта
-            if user.is_therapist:
-                try:
-                    therapist_profile = TherapistProfile.objects.filter(user=user).first()
-                    if therapist_profile:
-                        user_data['therapist_profile'] = TherapistProfileSerializer(therapist_profile).data
-                    else:
-                        user_data['therapist_profile'] = None
-                except Exception as e:
-                    print(f"Ошибка при получении профиля терапевта: {e}")
-                    user_data['therapist_profile'] = None
-            
-            # Если пользователь - клиент, получаем его профиль клиента
-            if user.is_client:
-                try:
-                    client_profile = ClientProfile.objects.filter(user=user).first()
-                    if client_profile:
-                        user_data['client_profile'] = ClientProfileSerializer(client_profile).data
-                    else:
-                        user_data['client_profile'] = None
-                except Exception as e:
-                    print(f"Ошибка при получении профиля клиента: {e}")
-                    user_data['client_profile'] = None
-                    
-        except Exception as e:
-            print(f"Ошибка при получении данных пользователя: {e}")
-        
-        return Response(user_data)
+
+    def get_object(self):
+        return self.request.user
 
 class EmailAuthToken(ObtainAuthToken):
     serializer_class = EmailAuthTokenSerializer
@@ -153,83 +123,115 @@ class EmailAuthToken(ObtainAuthToken):
             'is_client': user.is_client
         })
 
-class TherapistListView(APIView):
+class LoginView(APIView):
     permission_classes = [permissions.AllowAny]
-    
-    def get(self, request, *args, **kwargs):
-        try:
-            # Получаем всех терапевтов
-            therapist_profiles = TherapistProfile.objects.all()
-            
-            # Если есть фильтрация по специализации
-            specialization = request.query_params.get('specialization', None)
-            if specialization:
-                therapist_profiles = therapist_profiles.filter(specialization__icontains=specialization)
-            
-            # Сериализуем данные
-            serializer = TherapistProfileSerializer(therapist_profiles, many=True)
-            therapist_data = serializer.data
-            
-            # Дополняем данные профилей пользователей
-            for i, profile in enumerate(therapist_data):
-                therapist = therapist_profiles[i]
-                user_profile = UserProfile.objects.filter(user=therapist.user).first()
-                if user_profile:
-                    profile['name'] = user_profile.name
-                    
-                # Добавляем временные поля для совместимости с фронтендом
-                profile['experience'] = profile.get('experience_years', 0)
-                profile['rating'] = 5  # Временное значение
-                profile['price'] = 1500  # Временное значение
-                profile['specialization'] = "Психотерапия"  # Временное значение
-                profile['image'] = "/default-profile.jpg"  # Временное значение
-                if 'profile_picture' in profile and profile['profile_picture']:
-                    profile['image'] = profile['profile_picture']
-            
-            return Response(therapist_data)
-        except Exception as e:
-            print(f"Ошибка при получении списка терапевтов: {e}")
-            return Response(
-                {"error": "Произошла ошибка при получении списка терапевтов"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+    serializer_class = EmailAuthTokenSerializer
 
-class TherapistDetailView(APIView):
-    permission_classes = [permissions.AllowAny]
-    
-    def get(self, request, pk=None, *args, **kwargs):
+    def post(self, request, *args, **kwargs):
+        serializer = EmailAuthTokenSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        email = serializer.validated_data['email']
+        password = serializer.validated_data['password']
+        user = authenticate(request, username=email, password=password)
+
+        if user is not None:
+            token, created = Token.objects.get_or_create(user=user)
+            user_data = CurrentUserSerializer(user, context={'request': request}).data
+            return Response({
+                'token': token.key,
+                'user': user_data
+            }, status=status.HTTP_200_OK)
+        else:
+            return Response({"error": "Invalid Credentials"}, status=status.HTTP_401_UNAUTHORIZED)
+
+class LogoutView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    def post(self, request, *args, **kwargs):
         try:
-            # Получаем профиль терапевта по ID
-            try:
-                therapist_profile = TherapistProfile.objects.get(id=pk)
-            except TherapistProfile.DoesNotExist:
-                return Response(
-                    {"error": "Профиль терапевта не найден"},
-                    status=status.HTTP_404_NOT_FOUND
-                )
-            
-            # Сериализуем данные
-            serializer = TherapistProfileSerializer(therapist_profile)
-            therapist_data = serializer.data
-            
-            # Добавляем данные из профиля пользователя
-            user_profile = UserProfile.objects.filter(user=therapist_profile.user).first()
-            if user_profile:
-                therapist_data['name'] = user_profile.name
-                
-            # Добавляем временные поля для совместимости с фронтендом
-            therapist_data['experience'] = therapist_data.get('experience_years', 0)
-            therapist_data['rating'] = 5  # Временное значение
-            therapist_data['price'] = 1500  # Временное значение
-            therapist_data['specialization'] = "Психотерапия"  # Временное значение
-            therapist_data['image'] = "/default-profile.jpg"  # Временное значение
-            if 'profile_picture' in therapist_data and therapist_data['profile_picture']:
-                therapist_data['image'] = therapist_data['profile_picture']
-            
-            return Response(therapist_data)
-        except Exception as e:
-            print(f"Ошибка при получении данных терапевта: {e}")
-            return Response(
-                {"error": "Произошла ошибка при получении данных терапевта"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+            request.user.auth_token.delete()
+        except: pass
+        return Response({"detail": "Successfully logged out."}, status=status.HTTP_200_OK)
+
+class SkillListView(generics.ListAPIView):
+    queryset = Skill.objects.all().order_by('name')
+    serializer_class = SkillSerializer
+    permission_classes = [permissions.AllowAny]
+
+class LanguageListView(generics.ListAPIView):
+    queryset = Language.objects.all().order_by('name')
+    serializer_class = LanguageSerializer
+    permission_classes = [permissions.AllowAny]
+
+class TherapistListView(generics.ListAPIView):
+    serializer_class = TherapistProfileReadSerializer
+    permission_classes = [permissions.AllowAny]
+    queryset = TherapistProfile.objects.filter(
+        is_verified=True, is_subscribed=True
+    ).select_related('user', 'user__profile').prefetch_related('skills', 'languages')
+
+class TherapistDetailView(generics.RetrieveAPIView):
+    serializer_class = TherapistProfileReadSerializer
+    permission_classes = [permissions.AllowAny]
+    queryset = TherapistProfile.objects.filter(
+        is_verified=True, is_subscribed=True
+    ).select_related('user', 'user__profile').prefetch_related('skills', 'languages')
+    lookup_field = 'id'
+
+class MyProfileBaseUpdateView(generics.UpdateAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_object(self):
+        return self.request.user
+
+    @transaction.atomic
+    def update(self, request, *args, **kwargs):
+        user = self.get_object()
+        user_profile = user.profile
+
+        user_serializer = UserUpdateSerializer(user, data=request.data, partial=True)
+        user_serializer.is_valid(raise_exception=True)
+        user_serializer.save()
+
+        profile_serializer = UserProfileUpdateSerializer(user_profile, data=request.data, partial=True)
+        profile_serializer.is_valid(raise_exception=True)
+        profile_serializer.save()
+
+        return Response(CurrentUserSerializer(user, context={'request': request}).data)
+
+class MyProfilePictureUpdateView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    parser_classes = [parsers.MultiPartParser, parsers.FormParser]
+
+    def post(self, request, *args, **kwargs):
+        user = request.user
+        profile = user.profile
+        file = request.FILES.get('profile_picture')
+
+        if file:
+            profile.profile_picture = file
+            profile.save(update_fields=['profile_picture'])
+            return Response(CurrentUserSerializer(user, context={'request': request}).data, status=status.HTTP_200_OK)
+        else:
+            return Response({'error': 'No profile picture provided'}, status=status.HTTP_400_BAD_REQUEST)
+
+class MyTherapistProfileUpdateView(generics.UpdateAPIView):
+    serializer_class = TherapistProfileUpdateSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_object(self):
+        return get_object_or_404(TherapistProfile, user=self.request.user)
+
+    def update(self, request, *args, **kwargs):
+        response = super().update(request, *args, **kwargs)
+        return Response(CurrentUserSerializer(self.request.user, context={'request': request}).data)
+
+class MyClientProfileUpdateView(generics.UpdateAPIView):
+    serializer_class = ClientProfileUpdateSerializer
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get_object(self):
+        return get_object_or_404(ClientProfile, user=self.request.user)
+
+    def update(self, request, *args, **kwargs):
+        response = super().update(request, *args, **kwargs)
+        return Response(CurrentUserSerializer(self.request.user, context={'request': request}).data)
