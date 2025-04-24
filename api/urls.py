@@ -37,6 +37,10 @@ urlpatterns = [
     # Список фотографий конкретного терапевта
     path('therapists/<int:therapist_id>/photos/', views.TherapistPhotosListView.as_view(), name='therapist-photos-list'),
 
+    # --- Публикации ---
+    path('publications/', views.PublicationListCreateView.as_view(), name='publication-list-create'),
+    path('publications/<int:pk>/', views.PublicationDetailView.as_view(), name='publication-detail'),
+
     # Включаем URL из роутера (для управления своими фото и публикациями)
     path('', include(router.urls)),
 ] 

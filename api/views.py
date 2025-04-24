@@ -7,6 +7,7 @@ from rest_framework.authtoken.views import ObtainAuthToken
 from django.contrib.auth import get_user_model, authenticate
 from django.shortcuts import get_object_or_404
 from django.db import transaction
+from django_filters.rest_framework import DjangoFilterBackend
 from .models import UserProfile, TherapistProfile, ClientProfile, InviteCode, Skill, Language, Role, TherapistPhoto, Publication
 from .serializers import (
     UserSerializer, UserProfileSerializer, TherapistProfileSerializer,
@@ -421,3 +422,25 @@ class TherapistPhotosListView(generics.ListAPIView):
         return TherapistPhoto.objects.filter(
             therapist_profile=therapist
         ).order_by('order')
+
+class PublicationListCreateView(generics.ListCreateAPIView):
+    serializer_class = PublicationSerializer
+    permission_classes = [permissions.IsAuthenticatedOrReadOnly]
+    filter_backends = [DjangoFilterBackend]
+    filterset_fields = ['author']
+
+    def get_queryset(self):
+        return Publication.objects.select_related('author').all()
+
+    def perform_create(self, serializer):
+        serializer.save(author=self.request.user)
+
+class PublicationDetailView(generics.RetrieveUpdateDestroyAPIView):
+    queryset = Publication.objects.all()
+    serializer_class = PublicationSerializer
+    permission_classes = [permissions.IsAuthenticatedOrReadOnly]
+
+    def get_permissions(self):
+        if self.request.method in ['PUT', 'PATCH', 'DELETE']:
+            return [permissions.IsAuthenticated()]
+        return [permissions.IsAuthenticatedOrReadOnly()]
