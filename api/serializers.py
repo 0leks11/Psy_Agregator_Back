@@ -7,6 +7,7 @@ from .models import (
 )
 from rest_framework.authtoken.models import Token
 from django.contrib.auth import authenticate
+import uuid
 
 User = get_user_model()
 
@@ -118,7 +119,7 @@ class TherapistProfileDetailedSerializer(serializers.ModelSerializer):
         fields = ('about', 'experience_years', 'skills', 'languages',
                   'total_hours_worked', 'display_hours', 'office_location',
                   'is_verified', 'is_subscribed',
-                  'video_intro_url', 'website_url', 'linkedin_url')
+                  'short_video_url', 'status', 'photos')
 
 class ClientProfileDetailedSerializer(serializers.ModelSerializer):
     interested_topics = serializers.PrimaryKeyRelatedField(queryset=Skill.objects.all(), many=True, required=False)
@@ -149,7 +150,7 @@ class TherapistProfileUpdateSerializer(serializers.ModelSerializer):
         model = TherapistProfile
         fields = ('about', 'experience_years', 'skills', 'languages',
                   'total_hours_worked', 'display_hours', 'office_location',
-                  'video_intro_url', 'website_url', 'linkedin_url')
+                  'short_video_url', 'website_url', 'linkedin_url')
 
 class ClientProfileUpdateSerializer(serializers.ModelSerializer):
     interested_topics = serializers.PrimaryKeyRelatedField(queryset=Skill.objects.all(), many=True, required=False)
@@ -177,6 +178,7 @@ class ClientRegistrationSerializer(serializers.ModelSerializer):
 
     @transaction.atomic
     def create(self, validated_data):
+        validated_data['public_id'] = uuid.uuid4()
         validated_data.pop('password_confirm')
         if 'username' not in validated_data or not validated_data['username']:
             validated_data['username'] = validated_data['email']
@@ -221,6 +223,7 @@ class TherapistRegistrationSerializer(serializers.ModelSerializer):
 
     @transaction.atomic
     def create(self, validated_data):
+        validated_data['public_id'] = uuid.uuid4()
         invite_code_obj = validated_data.pop('invite_code')
         validated_data.pop('password_confirm')
         
@@ -275,7 +278,7 @@ class TherapistProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = TherapistProfile
         fields = ['about', 'experience_years', 'is_verified', 'is_subscribed', 'skills', 'languages',
-                 'video_intro_url', 'website_url', 'linkedin_url']
+                 'short_video_url', 'website_url', 'linkedin_url']
 
 class ClientProfileSerializer(serializers.ModelSerializer):
     class Meta:
@@ -303,14 +306,12 @@ class PublicationSerializer(serializers.ModelSerializer):
     """
     author_name = serializers.SerializerMethodField()
     author_photo = serializers.SerializerMethodField()
-    featured_image_url = serializers.SerializerMethodField()
     
     class Meta:
         model = Publication
         fields = (
             'id', 'author', 'author_name', 'author_photo',
-            'title', 'content', 'featured_image', 'featured_image_url',
-            'is_published', 'created_at', 'updated_at'
+            'title', 'content', 'created_at', 'updated_at'
         )
         read_only_fields = ('author', 'created_at', 'updated_at')
     
@@ -324,14 +325,6 @@ class PublicationSerializer(serializers.ModelSerializer):
                 return request.build_absolute_uri(obj.author.profile.profile_picture.url)
             return obj.author.profile.profile_picture.url
         return None
-    
-    def get_featured_image_url(self, obj):
-        if obj.featured_image:
-            request = self.context.get('request')
-            if request is not None:
-                return request.build_absolute_uri(obj.featured_image.url)
-            return obj.featured_image.url
-        return None
 
 class PublicationWriteSerializer(serializers.ModelSerializer):
     """
@@ -339,8 +332,85 @@ class PublicationWriteSerializer(serializers.ModelSerializer):
     """
     class Meta:
         model = Publication
-        fields = ('title', 'content', 'featured_image', 'is_published')
+        fields = ('title', 'content')
         
     def create(self, validated_data):
         # author устанавливается в представлении
-        return Publication.objects.create(**validated_data) 
+        return Publication.objects.create(**validated_data)
+
+class SimplePublicationSerializer(serializers.ModelSerializer):
+    """Сериализатор для краткого отображения публикации"""
+    class Meta:
+        model = Publication
+        fields = ('id', 'title', 'created_at')
+        read_only_fields = fields
+
+class PublicUserProfileSerializer(serializers.ModelSerializer):
+    # --- Поля из User ---
+    public_id = serializers.UUIDField(read_only=True)
+    first_name = serializers.CharField(read_only=True)
+    last_name = serializers.CharField(read_only=True)
+
+    # --- Поля из UserProfile ---
+    pronouns = serializers.CharField(source='profile.pronouns', read_only=True, allow_null=True)
+    profile_picture_url = serializers.ImageField(source='profile.profile_picture', read_only=True)
+
+    # --- Поля из TherapistProfile ---
+    about = serializers.CharField(source='therapist_profile.about', read_only=True, allow_null=True)
+    skills = SkillSerializer(source='therapist_profile.skills', many=True, read_only=True)
+    languages = LanguageSerializer(source='therapist_profile.languages', many=True, read_only=True)
+    short_video_url = serializers.URLField(source='therapist_profile.short_video_url', read_only=True, allow_null=True)
+    status = serializers.CharField(source='therapist_profile.status', read_only=True, allow_null=True)
+    status_display = serializers.CharField(source='therapist_profile.get_status_display', read_only=True)
+    photos = serializers.JSONField(source='therapist_profile.photos', read_only=True)
+
+    # --- Поля из Publication ---
+    publications = SimplePublicationSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = User
+        fields = (
+            'public_id', 'first_name', 'last_name', 'pronouns', 'profile_picture_url',
+            'about', 'skills', 'languages', 'short_video_url', 'status', 'status_display',
+            'publications', 'photos'
+        )
+        read_only_fields = fields 
+
+class TherapistCardSerializer(serializers.ModelSerializer):
+    """Сериализатор для данных, необходимых в TherapistCard на фронтенде"""
+    public_id = serializers.UUIDField(read_only=True)
+    id = serializers.IntegerField(read_only=True)
+
+    # Вложенные данные через SerializerMethodField для контроля структуры
+    profile = serializers.SerializerMethodField()
+    therapist_profile = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = ('id', 'public_id', 'first_name', 'last_name', 'profile', 'therapist_profile')
+
+    def get_profile(self, obj):
+        if hasattr(obj, 'profile') and obj.profile:
+            request = self.context.get('request')
+            photo_url = obj.profile.profile_picture.url if obj.profile.profile_picture else None
+            if request and photo_url:
+                return {'profile_picture_url': request.build_absolute_uri(photo_url)}
+            return {'profile_picture_url': None}
+        return None
+
+    def get_therapist_profile(self, obj):
+        if hasattr(obj, 'therapist_profile') and obj.therapist_profile:
+            tp = obj.therapist_profile
+            skills_data = SkillSerializer(tp.skills.all(), many=True).data
+            languages_data = LanguageSerializer(tp.languages.all(), many=True).data
+            
+            return {
+                'about': (tp.about[:100] + '...') if tp.about and len(tp.about) > 100 else tp.about,
+                'experience_years': tp.experience_years,
+                'is_verified': tp.is_verified,
+                'status': tp.status,
+                'status_display': tp.get_status_display(),
+                'skills': skills_data,
+                'languages': languages_data
+            }
+        return None 

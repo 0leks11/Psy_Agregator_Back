@@ -1,4 +1,4 @@
-from django.urls import path, include
+from django.urls import path, include, re_path
 from rest_framework.routers import DefaultRouter
 from . import views
 
@@ -39,7 +39,10 @@ urlpatterns = [
 
     # --- Публикации ---
     path('publications/', views.PublicationListCreateView.as_view(), name='publication-list-create'),
-    path('publications/<int:pk>/', views.PublicationDetailView.as_view(), name='publication-detail'),
+    path('publications/<uuid:pk>/', views.PublicationDetailView.as_view(), name='publication-detail'),
+
+    # --- Публичные профили пользователей ---
+    path('users/<uuid:public_user_id>/profile/', views.PublicUserProfileView.as_view(), name='public-user-profile'),
 
     # Включаем URL из роутера (для управления своими фото и публикациями)
     path('', include(router.urls)),

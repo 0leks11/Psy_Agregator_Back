@@ -16,13 +16,16 @@ from .serializers import (
     CurrentUserSerializer, TherapistProfileReadSerializer, SkillSerializer, LanguageSerializer,
     UserUpdateSerializer, UserProfileUpdateSerializer,
     TherapistProfileUpdateSerializer, ClientProfileUpdateSerializer,
-    TherapistPhotoSerializer, PublicationSerializer, PublicationWriteSerializer
+    TherapistPhotoSerializer, PublicationSerializer, PublicationWriteSerializer,
+    PublicUserProfileSerializer, TherapistCardSerializer
 )
 from rest_framework.views import APIView
 from .permissions import IsOwnerOrReadOnly, IsTherapistOwner
 from django.db.models import Prefetch, Count, Avg, Q
 from django.utils import timezone
 from django.conf import settings
+from django.http import Http404
+from rest_framework.pagination import PageNumberPagination
 
 User = get_user_model()
 
@@ -170,24 +173,25 @@ class LanguageListView(generics.ListAPIView):
 
 class TherapistListView(generics.ListAPIView):
     """
-    Представление для списка терапевтов с пагинацией.
-    Возвращает только подтвержденных терапевтов с активной подпиской.
+    Возвращает список верифицированных терапевтов.
+    Доступно всем пользователям.
     """
-    serializer_class = TherapistProfileReadSerializer
+    serializer_class = TherapistCardSerializer
     permission_classes = [permissions.AllowAny]
-    
+    pagination_class = PageNumberPagination
+    pagination_class.page_size = 12
+
     def get_queryset(self):
-        queryset = TherapistProfile.objects.filter(
-            is_verified=True,
-            is_subscribed=True
+        return User.objects.select_related(
+            'profile', 'therapist_profile'
         ).prefetch_related(
-            'skills',
-            'languages',
-            'photos',
-            Prefetch('user', queryset=UserProfile.objects.all())
-        ).select_related('user')
-        
-        return queryset
+            'therapist_profile__skills',
+            'therapist_profile__languages'
+        ).filter(
+            profile__role=Role.THERAPIST,
+            therapist_profile__is_verified=True,
+            therapist_profile__is_subscribed=True
+        ).order_by('-therapist_profile__created_at')
 
 class TherapistDetailView(generics.RetrieveAPIView):
     """
@@ -444,3 +448,42 @@ class PublicationDetailView(generics.RetrieveUpdateDestroyAPIView):
         if self.request.method in ['PUT', 'PATCH', 'DELETE']:
             return [permissions.IsAuthenticated()]
         return [permissions.IsAuthenticatedOrReadOnly()]
+
+class PublicUserProfileView(generics.RetrieveAPIView):
+    """
+    Возвращает публичный профиль пользователя (предназначен для терапевтов).
+    Доступно только аутентифицированным пользователям.
+    Показывает профиль только если это верифицированный терапевт.
+    """
+    serializer_class = PublicUserProfileSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    queryset = User.objects.select_related(
+        'profile', 'therapist_profile'
+    ).prefetch_related(
+        'publications',
+        'therapist_profile__skills',
+        'therapist_profile__languages'
+    ).filter(
+        profile__role=Role.THERAPIST
+    )
+    lookup_field = 'public_id'
+    lookup_url_kwarg = 'public_user_id'
+
+    def get_object(self):
+        # Получаем объект стандартным способом
+        user = super().get_object()
+
+        # Проверяем наличие и статус профиля терапевта
+        try:
+            if not hasattr(user, 'therapist_profile'):
+                raise Http404("Профиль терапевта не найден.")
+
+            is_allowed_to_view = user.therapist_profile.is_verified
+
+            if not is_allowed_to_view:
+                raise Http404("Профиль недоступен.")
+
+        except AttributeError:
+            raise Http404("Профиль терапевта не найден.")
+
+        return user

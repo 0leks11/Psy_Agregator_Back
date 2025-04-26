@@ -103,19 +103,29 @@ class UserProfileAdmin(admin.ModelAdmin):
 
 @admin.register(TherapistProfile)
 class TherapistProfileAdmin(admin.ModelAdmin):
-    list_display = ('user', 'is_verified', 'is_subscribed', 'experience_years', 'display_hours')
-    list_filter = ('is_verified', 'is_subscribed', 'display_hours', 'languages', 'skills')
+    list_display = ('user', 'is_verified', 'is_subscribed', 'experience_years', 'display_hours', 'status')
+    list_filter = ('is_verified', 'is_subscribed', 'display_hours', 'status', 'languages', 'skills')
     search_fields = ('user__email', 'user__first_name', 'user__last_name', 'about')
     list_editable = ('is_verified', 'is_subscribed', 'display_hours')
     raw_id_fields = ('user',)
     filter_horizontal = ('skills', 'languages',)
-    # Добавляем инлайн для фото
     inlines = [TherapistPhotoInline]
-    # Добавляем новые поля в fieldsets
-    fields = ('user', 'about', 'experience_years', 'office_location',
-             'skills', 'languages', 'total_hours_worked', 'display_hours',
-             'video_intro_url', 'website_url', 'linkedin_url',
-             'is_verified', 'is_subscribed')
+
+    fields = (
+        'user',
+        'about',
+        'experience_years',
+        'skills',
+        'languages',
+        'total_hours_worked',
+        'display_hours',
+        'office_location',
+        'status',
+        'short_video_url',
+        'photos',
+        'is_verified',
+        'is_subscribed'
+    )
 
 @admin.register(ClientProfile)
 class ClientProfileAdmin(admin.ModelAdmin):
@@ -134,10 +144,9 @@ class InviteCodeAdmin(admin.ModelAdmin):
 # Админка для Публикаций
 @admin.register(Publication)
 class PublicationAdmin(admin.ModelAdmin):
-    list_display = ('title', 'author_email', 'is_published', 'created_at', 'updated_at')
-    list_filter = ('is_published', 'author')
+    list_display = ('title', 'author_email', 'created_at', 'updated_at')
+    list_filter = ( 'author',)
     search_fields = ('title', 'content', 'author__email')
-    list_editable = ('is_published',)
     raw_id_fields = ('author',)
     readonly_fields = ('created_at', 'updated_at', 'display_featured_image')
     fields = ('author', 'title', 'content', 'featured_image', 'display_featured_image', 'is_published', 'created_at', 'updated_at')

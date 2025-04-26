@@ -2,6 +2,7 @@ from django.contrib.auth.models import AbstractUser
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 from django.conf import settings
+import uuid
 
 # --- Новые модели для выбора ---
 class Skill(models.Model):
@@ -29,10 +30,22 @@ class Gender(models.TextChoices):
     OTHER = 'OTHER', 'Другое'
     PREFER_NOT_TO_SAY = 'UNKNOWN', 'Не указан'
 
+class TherapistStatus(models.TextChoices):
+    STUDENT_1 = 'STUDENT_1', 'Студент 1 ступени'
+    GRADUATE_1 = 'GRADUATE_1', 'Выпускник 1 ступени'
+    STUDENT_2 = 'STUDENT_2', 'Студент 2 ступени'
+    GRADUATE_2 = 'GRADUATE_2', 'Выпускник 2 ступени'
+
 class User(AbstractUser):
     email = models.EmailField(_('email address'), unique=True)
     is_therapist = models.BooleanField(default=False)
     is_client = models.BooleanField(default=False)
+    public_id = models.UUIDField(
+        editable=False,
+        unique=True,
+        db_index=True,
+        null=True  # Временно разрешаем null для облегчения миграции
+    )
 
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = ['username']
@@ -45,6 +58,7 @@ class UserProfile(models.Model):
     role = models.CharField(max_length=10, choices=Role.choices, default=Role.CLIENT)
     gender = models.CharField(max_length=10, choices=Gender.choices, default=Gender.PREFER_NOT_TO_SAY, blank=True)
     profile_picture = models.ImageField(upload_to='profile_pics/', blank=True, null=True)
+    pronouns = models.CharField("Обращение (напр. she/her)", max_length=30, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -62,9 +76,15 @@ class TherapistProfile(models.Model):
     total_hours_worked = models.PositiveIntegerField("Всего часов практики", blank=True, null=True)
     display_hours = models.BooleanField("Показывать часы практики в профиле", default=False)
     office_location = models.CharField("Место/Формат работы", max_length=200, blank=True)
-    video_intro_url = models.URLField("Ссылка на видео-визитку", blank=True, null=True)
-    website_url = models.URLField("Личный сайт", blank=True, null=True)
-    linkedin_url = models.URLField("Профиль LinkedIn", blank=True, null=True)
+    status = models.CharField(
+        "Статус обучения/практики",
+        max_length=20,
+        choices=TherapistStatus.choices,
+        blank=True,
+        null=True
+    )
+    short_video_url = models.URLField("URL видеовизитки", max_length=500, blank=True, null=True)
+    photos = models.JSONField("Фотогалерея (массив URL)", default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -80,6 +100,20 @@ class ClientProfile(models.Model):
 
     def __str__(self):
         return f"Client: {self.user.email}"
+
+class Publication(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    author = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='publications')
+    title = models.CharField(max_length=255, blank=True, null=True)
+    content = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return self.title or f"Publication by {self.author.email}"
 
 class InviteCode(models.Model):
     code = models.CharField(max_length=50, unique=True)
@@ -101,7 +135,7 @@ class TherapistPhoto(models.Model):
     therapist_profile = models.ForeignKey(
         TherapistProfile, 
         on_delete=models.CASCADE, 
-        related_name='photos',
+        related_name='gallery_photos',
         verbose_name="Профиль психолога"
     )
     image = models.ImageField(
@@ -128,40 +162,3 @@ class TherapistPhoto(models.Model):
 
     def __str__(self):
         return f"Фото {self.id} профиля {self.therapist_profile.user.email}"
-
-
-class Publication(models.Model):
-    """
-    Модель для публикаций психологов (статьи, информационные материалы).
-    """
-    author = models.ForeignKey(
-        settings.AUTH_USER_MODEL, 
-        on_delete=models.CASCADE,
-        related_name='publications',
-        verbose_name="Автор"
-    )
-    title = models.CharField(
-        max_length=200,
-        verbose_name="Заголовок"
-    )
-    content = models.TextField(verbose_name="Содержание")
-    featured_image = models.ImageField(
-        upload_to='publication_images/',
-        blank=True, 
-        null=True,
-        verbose_name="Изображение"
-    )
-    is_published = models.BooleanField(
-        default=False,
-        verbose_name="Опубликовано"
-    )
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-    class Meta:
-        verbose_name = "Публикация"
-        verbose_name_plural = "Публикации"
-        ordering = ['-created_at']
-
-    def __str__(self):
-        return f"{self.title} (by {self.author.email})"
