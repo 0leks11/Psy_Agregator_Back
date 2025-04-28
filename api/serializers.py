@@ -8,8 +8,11 @@ from .models import (
 from rest_framework.authtoken.models import Token
 from django.contrib.auth import authenticate
 import uuid
+from django.conf import settings
 
 User = get_user_model()
+
+DEFAULT_AVATAR_URL = settings.MEDIA_URL + 'defaults/default-avatar.png'
 
 # --- Сериализаторы для Списков Выбора ---
 class SkillSerializer(serializers.ModelSerializer):
@@ -27,11 +30,22 @@ class UserProfileSerializer(serializers.ModelSerializer):
     role = serializers.CharField(source='get_role_display', read_only=True)
     gender = serializers.CharField(source='get_gender_display', read_only=True)
     gender_code = serializers.CharField(source='gender', write_only=True, required=False, allow_blank=True)
-    profile_picture_url = serializers.ImageField(source='profile_picture', read_only=True)
+    profile_picture_url = serializers.SerializerMethodField()
+    pronouns = serializers.CharField(read_only=True, allow_null=True)
 
     class Meta:
         model = UserProfile
-        fields = ('role', 'gender', 'gender_code', 'profile_picture_url')
+        fields = ('role', 'gender', 'gender_code', 'pronouns', 'profile_picture_url')
+
+    def get_profile_picture_url(self, obj):
+        request = self.context.get('request')
+        if obj.profile_picture and hasattr(obj.profile_picture, 'url'):
+            if request:
+                return request.build_absolute_uri(obj.profile_picture.url)
+            return obj.profile_picture.url
+        if request:
+            return request.build_absolute_uri(DEFAULT_AVATAR_URL)
+        return DEFAULT_AVATAR_URL
 
 class BaseUserSerializer(serializers.ModelSerializer):
     class Meta:
@@ -353,7 +367,7 @@ class PublicUserProfileSerializer(serializers.ModelSerializer):
 
     # --- Поля из UserProfile ---
     pronouns = serializers.CharField(source='profile.pronouns', read_only=True, allow_null=True)
-    profile_picture_url = serializers.ImageField(source='profile.profile_picture', read_only=True)
+    profile_picture_url = serializers.SerializerMethodField()
 
     # --- Поля из TherapistProfile ---
     about = serializers.CharField(source='therapist_profile.about', read_only=True, allow_null=True)
@@ -374,14 +388,23 @@ class PublicUserProfileSerializer(serializers.ModelSerializer):
             'about', 'skills', 'languages', 'short_video_url', 'status', 'status_display',
             'publications', 'photos'
         )
-        read_only_fields = fields 
+        read_only_fields = fields
+
+    def get_profile_picture_url(self, obj):
+        request = self.context.get('request')
+        # Проверяем наличие profile и картинки в нем
+        if hasattr(obj, 'profile') and obj.profile and obj.profile.profile_picture and hasattr(obj.profile.profile_picture, 'url'):
+            if request:
+                return request.build_absolute_uri(obj.profile.profile_picture.url)
+            return obj.profile.profile_picture.url
+        # Иначе возвращаем дефолтный аватар
+        if request:
+            return request.build_absolute_uri(DEFAULT_AVATAR_URL)
+        return DEFAULT_AVATAR_URL
 
 class TherapistCardSerializer(serializers.ModelSerializer):
     """Сериализатор для данных, необходимых в TherapistCard на фронтенде"""
     public_id = serializers.UUIDField(read_only=True)
-    id = serializers.IntegerField(read_only=True)
-
-    # Вложенные данные через SerializerMethodField для контроля структуры
     profile = serializers.SerializerMethodField()
     therapist_profile = serializers.SerializerMethodField()
 
@@ -390,20 +413,21 @@ class TherapistCardSerializer(serializers.ModelSerializer):
         fields = ('id', 'public_id', 'first_name', 'last_name', 'profile', 'therapist_profile')
 
     def get_profile(self, obj):
-        if hasattr(obj, 'profile') and obj.profile:
-            request = self.context.get('request')
-            photo_url = obj.profile.profile_picture.url if obj.profile.profile_picture else None
-            if request and photo_url:
-                return {'profile_picture_url': request.build_absolute_uri(photo_url)}
-            return {'profile_picture_url': None}
-        return None
+        request = self.context.get('request')
+        picture_url = DEFAULT_AVATAR_URL  # Дефолтное значение
+        if hasattr(obj, 'profile') and obj.profile and obj.profile.profile_picture and hasattr(obj.profile.profile_picture, 'url'):
+            picture_url = obj.profile.profile_picture.url  # URL своей картинки
+
+        # Строим абсолютный URL, если есть request
+        absolute_picture_url = request.build_absolute_uri(picture_url) if request else picture_url
+        return {
+            'profile_picture_url': absolute_picture_url
+        }
 
     def get_therapist_profile(self, obj):
         if hasattr(obj, 'therapist_profile') and obj.therapist_profile:
             tp = obj.therapist_profile
-            skills_data = SkillSerializer(tp.skills.all(), many=True).data
-            languages_data = LanguageSerializer(tp.languages.all(), many=True).data
-            
+            skills_data = SkillSerializer(tp.skills.all()[:3], many=True).data
             return {
                 'about': (tp.about[:100] + '...') if tp.about and len(tp.about) > 100 else tp.about,
                 'experience_years': tp.experience_years,
@@ -411,6 +435,6 @@ class TherapistCardSerializer(serializers.ModelSerializer):
                 'status': tp.status,
                 'status_display': tp.get_status_display(),
                 'skills': skills_data,
-                'languages': languages_data
+                'skills_count': tp.skills.count()
             }
         return None 

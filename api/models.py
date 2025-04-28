@@ -41,6 +41,7 @@ class User(AbstractUser):
     is_therapist = models.BooleanField(default=False)
     is_client = models.BooleanField(default=False)
     public_id = models.UUIDField(
+        default=uuid.uuid4,
         editable=False,
         unique=True,
         db_index=True,
