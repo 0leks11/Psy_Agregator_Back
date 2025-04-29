@@ -356,7 +356,7 @@ class SimplePublicationSerializer(serializers.ModelSerializer):
     """Сериализатор для краткого отображения публикации"""
     class Meta:
         model = Publication
-        fields = ('id', 'title', 'created_at')
+        fields = ('id', 'title', 'content', 'created_at')
         read_only_fields = fields
 
 class PublicUserProfileSerializer(serializers.ModelSerializer):
