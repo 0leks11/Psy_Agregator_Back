@@ -145,19 +145,13 @@ class InviteCodeAdmin(admin.ModelAdmin):
 @admin.register(Publication)
 class PublicationAdmin(admin.ModelAdmin):
     list_display = ('title', 'author_email', 'created_at', 'updated_at')
-    list_filter = ( 'author',)
+    list_filter = ('author',)
     search_fields = ('title', 'content', 'author__email')
     raw_id_fields = ('author',)
-    readonly_fields = ('created_at', 'updated_at', 'display_featured_image')
-    fields = ('author', 'title', 'content', 'featured_image', 'display_featured_image', 'is_published', 'created_at', 'updated_at')
+    readonly_fields = ('created_at', 'updated_at')
+    fields = ('author', 'title', 'content', 'created_at', 'updated_at')
 
     def author_email(self, obj):
         return obj.author.email
     author_email.short_description = 'Автор'
     author_email.admin_order_field = 'author__email'
-
-    def display_featured_image(self, obj):
-        if obj.featured_image:
-            return format_html('<img src="{}" height="100" />', obj.featured_image.url)
-        return "Нет фото"
-    display_featured_image.short_description = 'Превью изображения'
